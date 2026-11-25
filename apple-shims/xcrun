@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+
+shim_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export SWEETPAD_DARWIN_SDK="${SWEETPAD_DARWIN_SDK:-$shim_dir/../darwin.artifactbundle}"
+
+case "${1:-}:${2:-}" in
+  --find:clang)
+    printf '%s\n' "$shim_dir/clang"
+    exit 0
+    ;;
+  clang:*)
+    shift
+    exec "$shim_dir/clang" "$@"
+    ;;
+esac
+
+exec "$shim_dir/../sweetpad-native-tools/xcrun" "$@"

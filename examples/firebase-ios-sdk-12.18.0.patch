@@ -1,0 +1,71 @@
+--- a/Package.swift
++++ b/Package.swift
+@@ -35,8 +35,8 @@
+
+ func packageProducts() -> [Product] {
+   var products: [Product] = []
+-  #if os(macOS)
+-    // Add Apple-only products when building on macOS hosts.
++  #if os(macOS) || os(Linux)
++    // This isolated Linux build still targets the Apple iOS SDK.
+     products.append(contentsOf: [
+       .library(
+         name: "FirebaseAI",
+@@ -145,13 +145,26 @@
+       ),
+     ])
+   #endif // os(macOS)
++  #if os(Linux)
++    return products.filter {
++      ["FirebaseCore", "FirebaseInstallations", "FirebaseMessaging"].contains($0.name)
++    }
++  #else
+   return products
++  #endif
+ }
+
+ func packageDependencies() -> [Package.Dependency] {
+   var dependencies: [Package.Dependency] = []
+-  #if os(macOS)
+-    // Add Apple-only dependencies when building on macOS hosts.
++  #if os(Linux)
++    // This iOS build only consumes Core, Installations and Messaging.
++    dependencies = [
++      .package(url: "https://github.com/google/promises.git", "2.4.0" ..< "3.0.0"),
++      .package(url: "https://github.com/google/GoogleDataTransport.git", "10.1.0" ..< "11.0.0"),
++      .package(url: "https://github.com/google/GoogleUtilities.git", "8.1.0" ..< "9.0.0"),
++      .package(url: "https://github.com/firebase/nanopb.git", "2.30910.0" ..< "2.30911.0"),
++    ]
++  #elseif os(macOS)
+     dependencies.append(contentsOf: [
+       .package(
+         url: "https://github.com/google/promises.git",
+@@ -206,7 +219,7 @@
+       publicHeadersPath: "./"
+     ),
+   ]
+-  #if os(macOS)
++  #if os(macOS) || os(Linux)
+     targets.append(contentsOf: [
+       // MARK: - Firebase AI
+
+@@ -1387,7 +1400,19 @@
+       ),
+     ] + firestoreTargets())
+   #endif // os(macOS)
++  #if os(Linux)
++    return targets.filter {
++      [
++        "Firebase",
++        "FirebaseCore",
++        "FirebaseCoreInternal",
++        "FirebaseInstallations",
++        "FirebaseMessaging",
++      ].contains($0.name)
++    }
++  #else
+   return targets
++  #endif
+ }
+
+ // MARK: - Helper Functions
