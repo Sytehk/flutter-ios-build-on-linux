@@ -1,6 +1,6 @@
 # Build and run Flutter iOS apps on Linux
 
-This is the local setup we used to build a Flutter app, sign it, and run it on a physical iPhone. The same SweetPad workspace also built an unsigned iPhone Release app from a second Flutter checkout.
+This guide builds, signs, and runs a stock Flutter app on a physical iPhone using SweetPad on Linux. Complete sections 1–3, then follow the [stock app walkthrough](#stock-app-walkthrough). The later sections cover additional native plugins, app entitlements, and Debug hot reload.
 
 The app source stays in its own checkout. Docker mounts the source read-only and writes generated files and build output to a private workspace. Compilation and signing run with Docker networking disabled. Installation goes directly to the iPhone over USB. Apple is still involved in downloading the SDK, issuing signing assets, and, when needed, personalizing developer support for the phone.
 
@@ -22,7 +22,7 @@ SweetPad's Linux support is experimental. The combination above ran on this mach
 
 ## 1. Prepare the Linux host
 
-Have Docker running, an installed Flutter SDK on Linux, Git, Python with `venv`, OpenSSL, `usbmuxd`, and a data-capable USB cable. On a fresh Ubuntu or Debian host, install the missing host packages using the distro package manager. Keep the Flutter SDK and the workspace on local storage with room for Xcode extraction, compiler sources, and DerivedData.
+Have Docker running with permission to use it from your shell, Git, Python 3 with `venv`, OpenSSL, `curl`, `xz`, `usbmuxd`, and a data-capable USB cable. On Ubuntu or Debian, install missing host packages with your package manager. The package names are `git python3 python3-venv openssl curl xz-utils unzip usbmuxd`. Keep the SDK, Xcode extraction, compiler sources, and DerivedData on local storage with room for several gigabytes of build state.
 
 Clone this repository to a private folder and use that checkout as the shared workspace. The commands use `~/sweetpad-ios` as an example. Set `tools` to the full path of your checkout. Keep the Flutter app checkout in a separate folder.
 
@@ -32,15 +32,23 @@ tools="$HOME/sweetpad-ios"  # Path to this repository's checkout
 flutter_sdk="$HOME/development/flutter"
 mkdir -p "$tools"/{tools,containers,docker-config,signing-tools,projects}
 docker version
-"$flutter_sdk/bin/flutter" --version
 systemctl is-active usbmuxd
 ```
 
-The local runner uses `~/development/flutter` and `~/.pub-cache`. If the Flutter SDK lives somewhere else, update the paths in the shared runner before preparing projects.
+Install the exact Flutter version used by the guide. For an existing Flutter 3.50.0 installation, set `flutter_sdk` to its path and run the version check. If you choose a separate `PUB_CACHE`, export it before the first Flutter invocation so the Flutter tool's own dependencies and the app's dependencies use the same cache.
+
+```bash
+mkdir -p "$(dirname "$flutter_sdk")"
+git clone --depth 1 --branch 3.50.0 https://github.com/flutter/flutter.git "$flutter_sdk"
+export SWEETPAD_FLUTTER_SDK="$flutter_sdk"
+"$flutter_sdk/bin/flutter" --version
+```
+
+The local runner defaults to `~/development/flutter` and `~/.pub-cache`. Keep `SWEETPAD_FLUTTER_SDK` and `PUB_CACHE` consistent throughout preparation and build. [Flutter SDK archive](https://docs.flutter.dev/install/archive)
 
 ## 2. Install SweetPad and import the Apple SDK
 
-1. Download the SweetPad 0.1.29 Linux release archive and its checksum for the **host** architecture. We used `sweetpad-cli-0.1.29-linux-x64.tar.gz`. Check the checksum and extract the whole archive into `$tools/tools`, including `libexec`.
+1. Download the [SweetPad 0.1.29 Linux release](https://github.com/sweetpad-dev/sweetpad/releases/tag/cli-v0.1.29) archive and its checksum for the **host** architecture. We used `sweetpad-cli-0.1.29-linux-x64.tar.gz`. Check the checksum and extract the whole archive into `$tools/tools`, including `libexec`.
 2. Download `Xcode_27.2.xip` directly through Apple Developer Downloads. We supplied Apple's archive to SweetPad on Linux. A Mac-exported SweetPad SDK archive is also supported.
 3. Pull the SweetPad Docker image. Import the Apple archive with a local Docker process after the image is available. This puts the extracted SDK at `$tools/darwin.artifactbundle`.
 
@@ -205,13 +213,45 @@ If `flutter pub get --enforce-lockfile` reports that it cannot satisfy the check
 
 Run `prepare` after dependency changes. For a custom iOS workspace, scheme, dependency layout, or generated localization directory, update the profile that `register` created. See the [example project profile](examples/project-profile.json). Mount generated files separately when Flutter needs to write them. Add public client settings through the profile's `public_defines_file` if the app needs them. Values in that file become part of the application. Keep Apple credentials, private keys, and backend service-role keys in separate private files.
 
+## Stock app walkthrough
+
+After setting up the tools in sections 1–3, generate Flutter's default iOS counter app and give it a bundle ID under a name your Apple Developer team can register. Keep the app outside the tools checkout.
+
+```bash
+app="$HOME/stock-flutter"
+project=stock-flutter
+org=com.example.sweetpad  # Replace with an identifier prefix for your team
+runner="$tools/shared-ios/sweetpad-ios.py"
+"$flutter_sdk/bin/flutter" create --platforms=ios --org "$org" \
+  --project-name stock_flutter "$app"
+grep 'PRODUCT_BUNDLE_IDENTIFIER =' "$app/ios/Runner.xcodeproj/project.pbxproj"
+python3 "$runner" register "$project" "$app"
+python3 "$runner" check "$project"
+python3 "$runner" prepare "$project"
+python3 "$runner" build "$project"
+```
+
+Use the Runner identifier without the `.RunnerTests` suffix. With the example prefix it is `com.example.sweetpad.stockFlutter`. The build prints the unsigned `Runner.app` path. The stock app needs no remote Swift packages, so proceed directly to signing.
+
+1. Pair the phone and enable Developer Mode as in section 5. Register the Runner app ID in Apple Developer, then use section 6 to obtain an iOS App Development profile for that app ID, your phone, and your Apple Development certificate. [Register an App ID](https://developer.apple.com/help/account/identifiers/register-an-app-id/)
+2. Install `rcodesign` as in section 7. In `$tools/projects/$project/signing/`, name the private key `development.key`, the leaf certificate `development.cer`, the matching WWDR intermediate `AppleWWDR.cer`, and the profile `Runner.mobileprovision`. Save the paired phone's UDID in `iphone-udid.txt` in the same directory.
+3. Set `unsigned_app` to the path printed by the build. Connect and unlock the paired phone, then run the stock installer.
+
+   ```bash
+   python3 "$tools/shared-ios/install-stock-app.py" "$project" "$unsigned_app"
+   ```
+
+The helper checks the profile against the bundle, certificate, and phone. It signs a staged copy, installs it over USB, reads back the installed version, and launches it. Look for **Flutter Demo Home Page** and tap **+** to confirm the count increases. For a second build of the same app, set `SWEETPAD_BUILD_NUMBER` to a value above the installed build number when running `build`.
+
+The stock app was verified from a fresh Flutter checkout, Pub cache, and project workspace on an iPhone. The test reused the matching imported Apple SDK and Linux iOS AOT compiler from sections 2 and 3.
+
 ## 5. Pair the iPhone and enable Developer Mode
 
 Install the pinned USB adapter in a private Python environment. Connect the unlocked iPhone with a data cable and accept **Trust This Computer** when iOS asks.
 
 ```bash
 python3 -m venv "$tools/device-tools"
-"$tools/device-tools/bin/python" -m pip install pymobiledevice3==11.50.0
+"$tools/device-tools/bin/python" -m pip install pymobiledevice3==11.50.0 pexpect==4.9.0
 export SWEETPAD_DEVICE_PYTHON="$tools/device-tools/bin/python"
 
 "$SWEETPAD_DEVICE_PYTHON" -m pymobiledevice3 lockdown pair
@@ -350,6 +390,25 @@ If `GeneratedPluginRegistrant.m` reports `module '<plugin>' not found`, compare 
 
 After adding image compression, the linker reported duplicate `WebP…` symbols from `libwebp.o` and PostHog's `phlibwebp.o`. The local build used one compatible libwebp for both packages by pointing PostHog's private Swift package and its WebP import at the same library used by the image compression package. Prepare the native sources and caches separately, then retry the offline build.
 
+The [native package example](examples/native-packages/) contains the Swift manifests and a preparation script for `flutter_image_compress_common` 1.0.6, `posthog_flutter` 5.24.2, Mantle 2.2.0, and PostHog iOS 3.56.0. It copies the plugin sources from Pub and the matching upstream checkouts into your private project state. The two packages share libwebp 1.6.0.
+
+Run this after warming Pub and running the project's `prepare` command. Use the same `PUB_CACHE` as the build. If Firebase is also in the app, apply the Firebase manifest and plugin overrides described above before resolving Swift packages.
+
+```bash
+state="$tools/projects/$project"
+mkdir -p "$state/upstream" "$state/git-mirrors"
+git clone --branch 2.2.0 --depth 1 https://github.com/Mantle/Mantle.git "$state/upstream/Mantle"
+git clone --branch 3.56.0 --depth 1 https://github.com/PostHog/posthog-ios.git "$state/upstream/posthog-ios"
+git clone --mirror https://github.com/webmproject/libwebp.git "$state/git-mirrors/libwebp.git"
+
+python3 "$tools/examples/native-packages/prepare.py" \
+  "$state" "$state/upstream/Mantle" "$state/upstream/posthog-ios"
+python3 "$tools/shared-ios/sweetpad-ios.py" resolve-swift "$project"
+python3 "$tools/shared-ios/sweetpad-ios.py" build "$project"
+```
+
+`resolve-swift` runs Swift Package Manager with network access and stores fetched Git repositories and binary artifacts in that project's `swift-cache`. The container mounts the generated package, dependency caches, and private Swift source copies needed for resolution. Build and signing still run offline. The libwebp mirror supplies the Git submodule used by the offline Swift build. After running `prepare` again, rerun the native package helper to restore the generated manifest entries.
+
 ### Sentry static framework copy failures
 
 Check the full SweetPad task log if the build reports a Clang failure followed by an `llvm-lipo` error while copying `Sentry.framework`. In Cruvio, the copy task tried to remove the static executable and called the Linux linker. Passing `REMOVE_STATIC_EXECUTABLES_FROM_EMBEDDED_BUNDLES=NO` as a local build setting let the copy complete.
@@ -360,30 +419,42 @@ Before signing, check that the copied Sentry binary is a static archive, or that
 
 This manual workflow was verified from Linux with LLDB 21 on a phone running iOS 27.2.1. The successful Debug build, signing, and USB install took about 2 minutes 14 seconds. The initial debugger connection and Flutter sync took additional time. Subsequent Dart reloads took from under a second to about four seconds in the trial.
 
+The stock Flutter app also passed the shared-tunnel workflow below. A temporary title appeared after hot reload, and a second reload restored the original title while the iPhone process stayed the same.
+
 ### Build and install the Debug app
 
-1. Use the same SweetPad Docker setup and native dependency caches as Release. In a temporary version of the container build script, set `--configuration Debug` and keep the destination `generic/platform=iOS`. Hold the existing workspace locks while building. Use the app's actual workspace and scheme.
-2. Prepare the app's development Dart defines and a newer build number. For a standard Flutter project, `Debug.xcconfig` includes `Generated.xcconfig`. Bind-mount a private temporary copy of that generated file at the same path inside the container. Preserve the other generated settings and replace `DART_DEFINES`, `FLUTTER_BUILD_NAME`, and `FLUTTER_BUILD_NUMBER` with the values for this build. Flutter's generated config stores the defines as comma-separated base64-encoded `KEY=value` entries. In the verified setup, setting `XCODE_XCCONFIG_FILE` alone left the Debug build using stale settings.
-3. Stage the app from `Debug-iphoneos` in a separate private directory. Use valid development profiles for the main bundle and each extension, with the app's Debug entitlements, including `get-task-allow` for the app being debugged. Follow the signing and in-place installation checks in section 7. Before installing, confirm the newer build number, correct bundle ID, and the presence of `Frameworks/App.framework/flutter_assets/kernel_blob.bin` in the signed Flutter app. Read back the installed build number.
+1. Use the same SweetPad Docker setup and native dependency caches as Release. Set a build number above the installed one. Update the project's `public_defines_file` if the Debug app needs different client settings. The runner writes these settings into the `Generated.xcconfig` included by the app's Debug configuration.
+
+   ```bash
+   SWEETPAD_BUILD_NUMBER=2 python3 "$tools/shared-ios/sweetpad-ios.py" build "$project" --configuration Debug
+   ```
+
+2. Use the path printed under `Debug-iphoneos`. For the stock app, run `install-stock-app.py` with `--install-only` so the app waits for a suspended launch. For an app with extra targets or entitlements, follow section 7 and preserve the Debug entitlements, including `get-task-allow`. Confirm `Frameworks/App.framework/flutter_assets/kernel_blob.bin` is present in the signed app before attaching.
 
 ### Launch under LLDB
 
-1. Start the app's private syslog capture and launch it with `pymobiledevice3 developer dvt launch "$bundle_id" --suspended`. Note the process ID. Use `pymobiledevice3 developer debugserver start-server --local-port <debug-proxy-port>` to forward the debug server to Linux loopback through the userspace tunnel. Keep it running.
-2. In Linux LLDB, select `remote-ios` and create the target from the **local signed executable**. Use the installed bundle path from the device's installation service for the source side of `target modules search-paths add` and the local signed bundle for the destination. Add the local Flutter executable as a module. Loading device symbols with the defaults stalled the app on its splash screen in the trial. These were the working LLDB settings and connection commands:
+Install LLDB 21 with Python bindings. On Ubuntu builds that package this version, the packages are `lldb-21` and `python3-lldb-21`. Set `signed_app` to the signed Debug bundle path. Use the same `SWEETPAD_FLUTTER_SDK` used to build the app and start the USB syslog capture in one terminal. Set `device_python`, `signing`, and `debug_logs` in both terminals and keep the logs private.
 
-   ```text
-   platform select remote-ios
-   settings set target.memory-module-load-level minimal
-   settings set target.preload-symbols false
-   settings set symbols.enable-external-lookup false
-   target create "<local-signed-app>/<app-executable>"
-   target modules search-paths add "<installed-app-path>" "<local-signed-app>"
-   target modules add "<local-signed-app>/Frameworks/Flutter.framework/Flutter"
-   process connect connect://127.0.0.1:<debug-proxy-port>
-   process attach --pid <suspended-pid>
-   ```
+```bash
+umask 077
+device_python="$tools/device-tools/bin/python"
+signing="$tools/projects/$project/signing"
+debug_logs="$(mktemp -d "$signing/hot-reload.XXXXXX")"
+export PYMOBILEDEVICE3_UDID="$(<"$signing/iphone-udid.txt")"
+"$device_python" -m pymobiledevice3 syslog live -pn Runner \
+  -m 'Dart VM service is listening on' -o "$debug_logs/vm-service.log" >/dev/null
+```
 
-3. Before resuming, set a breakpoint on `NOTIFY_DEBUGGER_ABOUT_RX_PAGES` and attach the JIT callback from the installed Flutter SDK's `packages/flutter_tools/lib/src/ios/lldb.dart` (`_pythonScript`). Use the helper from the SDK that built the app. In the verified version, it reads the page address and length from ARM64 registers `x0` and `x1`, then uses LLDB to write a buffer of that length starting with `IHELPED!`. On iOS 27, set synchronous mode with `script lldb.debugger.SetAsync(False)` and resume the process after each stop on that breakpoint. The trial used a Python callback and a `pexpect` loop to run `process continue` after those stops. Inspect any other stop reason before resuming. Keep LLDB connected throughout the session.
+In the second terminal, use the same `debug_logs` path and paired device. Launch the installed app suspended, then pass the printed process ID to the helper. Set `bundle_id` to the Runner identifier.
+
+```bash
+"$device_python" -m pymobiledevice3 developer dvt launch "$bundle_id" --suspended
+pid=1234  # Replace with the process ID printed above
+"$device_python" "$tools/shared-ios/debug-iphone.py" "$signed_app" \
+  --pid "$pid" --lldb lldb-21 --logs "$debug_logs"
+```
+
+The helper uses the same USB userspace tunnel for the device service and the debugserver connection, as in the working XTRIM workflow. It loads the local Runner and Flutter binaries, prepares the JIT breakpoint before connecting, and resumes only stops from Flutter's JIT breakpoint. Check `lldb.log` if the helper stops. Leave the helper running while attaching Flutter.
 
 ### Attach Flutter and verify a reload
 
@@ -409,10 +480,12 @@ Pass any extra build-time defines as additional `--dart-define` arguments. Keep 
 | Provisioning or signature fails during install | Check the bundle IDs, profile expiration, phone UDID, signed capabilities, and matching key and certificate for every target |
 | The installed app shows Flutter's debugger-required screen | For hot reload, launch Debug suspended and attach LLDB as in section 9. For ordinary Home Screen launch, use Release |
 | The Debug app stays on its splash screen under LLDB | Use the local signed binaries and minimal device symbol loading, then check that the Flutter JIT breakpoint resolves and resumes |
+| LLDB closes or stalls during the initial handshake | Use the shared-tunnel helper in section 9. It keeps the device services together and sets up the JIT breakpoint before connecting LLDB |
 | Flutter attach cannot reach the phone | Check that the app published a Dart VM service URL, USB port forwarding is active, and the loopback URL retains its authentication path |
 | The app shows cached data | Verify the build includes the public backend settings and check that the backend responded to the app's requests |
 | SDK headers appear missing after `Too many open files` | Raise the soft file-descriptor limit inside the container before starting SweetPad, then retry |
 | `flutter pub get --enforce-lockfile` rejects the checkout's lockfile | Resolve a private copy with the shared Flutter SDK and select it with `local_lockfile` |
+| An offline `prepare` tries to fetch a package such as `test` | Initialize the Flutter SDK and fetch the app's packages with the same `PUB_CACHE` before copying the Flutter cache for Docker |
 | `GeneratedPluginRegistrant.m` reports a missing plugin module | Check whether the plugin only ships a podspec and whether its package and product are in the generated Swift manifest |
 | The linker reports duplicate `WebP…` symbols | Check which plugins supply libwebp and link one compatible copy |
 | Clang or `llvm-lipo` fails while copying `Sentry.framework` | Check for the static archive removal step, then follow the local build setting and pre-signing packaging checks in section 8 |

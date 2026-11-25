@@ -13,8 +13,8 @@ from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parents[1]
 PROJECTS = TOOLS / "projects"
-SDK = Path.home() / "development/flutter"
-PUB_CACHE = Path.home() / ".pub-cache"
+SDK = Path(os.environ.get("SWEETPAD_FLUTTER_SDK", Path.home() / "development/flutter")).resolve()
+PUB_CACHE = Path(os.environ.get("PUB_CACHE", Path.home() / ".pub-cache")).resolve()
 IMAGE = "sweetpad-local:0.1.29"
 IOS = ("Runner", "RunnerTests", "Runner.xcodeproj", "Runner.xcworkspace")
 
@@ -105,7 +105,7 @@ def prepare_settings(state, source, profile):
     )
 
 
-def offline_container(source, state, profile, action):
+def offline_container(source, state, profile, action, configuration):
     worktree = state / "source/app"
     container_state = Path(profile.get("container_state", state))
     container_worktree = container_state / "source/app"
@@ -161,6 +161,7 @@ def offline_container(source, state, profile, action):
     option = ["prepare"] if action == "prepare" else [
         profile.get("xcode_workspace", "ios/Runner.xcworkspace"),
         profile.get("scheme", "Runner"),
+        configuration,
         *profile.get("build_settings", []),
     ]
     command = ["docker", "--config", shared_config, "run", "--rm", "--network", "none"]
@@ -172,12 +173,34 @@ def offline_container(source, state, profile, action):
         "SWEETPAD_DARWIN_SDK": container_tools / "darwin.artifactbundle",
         "FLUTTER_ROOT": SDK,
         "FLUTTER_ALREADY_LOCKED": "true",
+        "SWEETPAD_HOST_UID": os.getuid(),
+        "SWEETPAD_HOST_GID": os.getgid(),
         "PUB_CACHE": PUB_CACHE,
         "CI": "true",
         "LANG": "C.UTF-8",
     }.items():
         command.extend(("-e", f"{key}={value}"))
     command.extend(("-w", container_worktree, "--entrypoint", "/bin/bash", IMAGE, container_tools / "shared-ios/container-build.sh", *option))
+    return subprocess.run(command).returncode
+
+
+def resolve_swift_packages(state):
+    app = state / "source/app"
+    packages = app / "ios/Flutter/ephemeral/Packages"
+    generated_package = packages / "FlutterGeneratedPluginSwiftPackage"
+    if not (generated_package / "Package.swift").is_file():
+        raise SystemExit("Run the project's prepare step before resolving Swift packages.")
+    cache = state / "swift-cache"
+    cache.mkdir(exist_ok=True)
+    command = ["docker", "--config", TOOLS / "docker-config", "run", "--rm", "--network", "bridge"]
+    mounts = [(packages, packages, False), (cache, "/root/.cache", False),
+              (SDK, SDK, True), (PUB_CACHE, PUB_CACHE, True)]
+    for directory in (app / "build/ios/SourcePackages", state / "native-packages"):
+        if directory.is_dir():
+            mounts.append((directory, directory, True))
+    for source, target, read_only in mounts:
+        command.extend(("--mount", f"type=bind,source={source},target={target}" + (",readonly" if read_only else "")))
+    command.extend(("-w", generated_package, "--entrypoint", "swift", IMAGE, "package", "resolve"))
     return subprocess.run(command).returncode
 
 
@@ -206,9 +229,10 @@ def dependency_fingerprint(source, state, profile):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("register", "check", "prepare", "build", "install"))
+    parser.add_argument("action", choices=("register", "check", "prepare", "resolve-swift", "build", "install"))
     parser.add_argument("project")
     parser.add_argument("source", type=Path, nargs="?")
+    parser.add_argument("--configuration", choices=("Release", "Debug"), default="Release")
     args = parser.parse_args()
     os.umask(0o077)
     if args.action == "register":
@@ -228,6 +252,8 @@ def main():
         raise SystemExit("This project's native dependency overrides require its existing manual preparation.")
     with (TOOLS / "shared-flutter.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        if args.action == "resolve-swift":
+            raise SystemExit(resolve_swift_packages(state))
         worktree = state / "source/app"
         manual = profile.get("prepare_manually", False)
         stamp = state / "prepared-dependencies.sha256"
@@ -238,13 +264,13 @@ def main():
         prepare_settings(state, source, profile)
         if args.action == "build" and not (worktree / ".dart_tool/package_config.json").is_file():
             raise SystemExit("Run the project's offline prepare step before building.")
-        status = offline_container(source, state, profile, args.action)
+        status = offline_container(source, state, profile, args.action, args.configuration)
         if status != 0:
             raise SystemExit(status)
         if args.action == "prepare":
             stamp.write_text(fingerprint)
         else:
-            for app in sorted((state / "derived-data").glob("*/Build/Products/Release-iphoneos/*.app")):
+            for app in sorted((state / "derived-data").glob(f"*/Build/Products/{args.configuration}-iphoneos/*.app")):
                 print(f"Built unsigned iPhone app: {app}")
 
 

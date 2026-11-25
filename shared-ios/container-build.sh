@@ -36,10 +36,17 @@ if [[ ${1:-} == prepare ]]; then
   "$FLUTTER_ROOT/bin/cache/dart-sdk/bin/dart" \
     --packages="$FLUTTER_ROOT/packages/flutter_tools/.dart_tool/package_config.json" \
     "$SWEETPAD_SHARED_TOOLS/prepare_ios_plugins.dart"
+  chown "$SWEETPAD_HOST_UID:$SWEETPAD_HOST_GID" \
+    ios/Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage/Package.swift
   exit
 fi
 
-sweetpad build --workspace "$1" --scheme "$2" --configuration Release \
+sweetpad build --workspace "$1" --scheme "$2" --configuration "$3" \
   --destination 'generic/platform=iOS' --non-interactive -- \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO TARGET_DEVICE_OS_VERSION=27.2 \
-  DEPLOYMENT_POSTPROCESSING=NO STRIP_INSTALLED_PRODUCT=NO COPY_PHASE_STRIP=NO "${@:3}"
+  DEPLOYMENT_POSTPROCESSING=NO STRIP_INSTALLED_PRODUCT=NO COPY_PHASE_STRIP=NO "${@:4}"
+
+shopt -s nullglob
+for app in /root/Library/Developer/Xcode/DerivedData/*/Build/Products/"$3-iphoneos"/*.app; do
+  chown -R "$SWEETPAD_HOST_UID:$SWEETPAD_HOST_GID" -- "$app"
+done

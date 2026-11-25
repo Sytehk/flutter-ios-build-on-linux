@@ -21,6 +21,9 @@
 !/shared-ios/
 /shared-ios/*
 !/shared-ios/container-build.sh
+!/shared-ios/debug-iphone.py
+!/shared-ios/flutter_jit_lldb.py
+!/shared-ios/install-stock-app.py
 !/shared-ios/sign-app.sh
 !/shared-ios/sweetpad-ios.py
 
@@ -28,3 +31,8 @@
 /examples/*
 !/examples/project-profile.json
 !/examples/firebase-ios-sdk-12.18.0.patch
+!/examples/native-packages/
+/examples/native-packages/*
+!/examples/native-packages/prepare.py
+!/examples/native-packages/image-compression.Package.swift
+!/examples/native-packages/posthog-ios.Package.swift
