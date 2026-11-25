@@ -215,23 +215,27 @@ Run `prepare` after dependency changes. For a custom iOS workspace, scheme, depe
 
 ## Stock app walkthrough
 
-After setting up the tools in sections 1–3, generate Flutter's default iOS counter app and give it a bundle ID under a name your Apple Developer team can register. Keep the app outside the tools checkout.
+After setting up the tools in sections 1–3, copy the [included stock Flutter counter app](examples/stock_flutter/) outside the tools checkout. The runner uses that copy as the app's source.
 
 ```bash
-app="$HOME/stock-flutter"
-project=stock-flutter
-org=com.example.sweetpad  # Replace with an identifier prefix for your team
+app="$(mktemp -d "$HOME/stock-flutter.XXXXXX")"
+cp -R "$tools/examples/stock_flutter/." "$app/"
+project=stock-flutter  # Pick an unused name if this project is already registered
 runner="$tools/shared-ios/sweetpad-ios.py"
-"$flutter_sdk/bin/flutter" create --platforms=ios --org "$org" \
-  --project-name stock_flutter "$app"
+```
+
+In the copy's `ios/Runner.xcodeproj/project.pbxproj`, replace `com.example.sweetpad.stockFlutter` everywhere with a bundle ID your Apple Developer team can register. Keep the `.RunnerTests` suffix on the test target. Use the Runner bundle ID when creating the signing profile below.
+
+```bash
 grep 'PRODUCT_BUNDLE_IDENTIFIER =' "$app/ios/Runner.xcodeproj/project.pbxproj"
+(cd "$app" && "$flutter_sdk/bin/flutter" pub get --enforce-lockfile)
 python3 "$runner" register "$project" "$app"
 python3 "$runner" check "$project"
 python3 "$runner" prepare "$project"
 python3 "$runner" build "$project"
 ```
 
-Use the Runner identifier without the `.RunnerTests` suffix. With the example prefix it is `com.example.sweetpad.stockFlutter`. The build prints the unsigned `Runner.app` path. The stock app needs no remote Swift packages, so proceed directly to signing.
+The build prints the unsigned `Runner.app` path. The stock app needs no remote Swift packages, so proceed directly to signing.
 
 1. Pair the phone and enable Developer Mode as in section 5. Register the Runner app ID in Apple Developer, then use section 6 to obtain an iOS App Development profile for that app ID, your phone, and your Apple Development certificate. [Register an App ID](https://developer.apple.com/help/account/identifiers/register-an-app-id/)
 2. Install `rcodesign` as in section 7. In `$tools/projects/$project/signing/`, name the private key `development.key`, the leaf certificate `development.cer`, the matching WWDR intermediate `AppleWWDR.cer`, and the profile `Runner.mobileprovision`. Save the paired phone's UDID in `iphone-udid.txt` in the same directory.

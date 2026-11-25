@@ -36,3 +36,4 @@
 !/examples/native-packages/prepare.py
 !/examples/native-packages/image-compression.Package.swift
 !/examples/native-packages/posthog-ios.Package.swift
+!/examples/stock_flutter/
